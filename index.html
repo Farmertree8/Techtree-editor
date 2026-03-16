@@ -47,6 +47,11 @@ height:6000px;
 pointer-events:none;
 }
 
+line{
+pointer-events:stroke;
+cursor:pointer;
+}
+
 .node{
 position:absolute;
 width:140px;
@@ -493,12 +498,32 @@ drawLinks()
 
 function drawLinks(){
 
-svg.innerHTML=""
+svg.innerHTML = `
+<defs>
+<marker id="arrow"
+markerWidth="10"
+markerHeight="10"
+refX="9"
+refY="3"
+orient="auto"
+markerUnits="strokeWidth">
+<path d="M0,0 L0,6 L9,3 z" fill="black"></path>
+</marker>
+</defs>
+`
 
 links.forEach((l,i)=>{
 
-let a=document.querySelector(`[data-id="${l.from}"]`)
-let b=document.querySelector(`[data-id="${l.to}"]`)
+let fromTech=techs[l.from]
+let toTech=techs[l.to]
+
+if(!fromTech || !toTech) return
+
+let start=l.from
+let end=l.to
+
+let a=document.querySelector(`[data-id="${start}"]`)
+let b=document.querySelector(`[data-id="${end}"]`)
 
 if(!a||!b) return
 
@@ -508,18 +533,42 @@ let rc=canvas.getBoundingClientRect()
 
 let ax=ra.left-rc.left+ra.width/2
 let ay=ra.top-rc.top+ra.height/2
+
 let bx=rb.left-rc.left+rb.width/2
 let by=rb.top-rc.top+rb.height/2
 
-let line=document.createElementNS("http://www.w3.org/2000/svg","line")
+let dx=bx-ax
+let dy=by-ay
 
-line.setAttribute("x1",ax)
-line.setAttribute("y1",ay)
-line.setAttribute("x2",bx)
-line.setAttribute("y2",by)
+let len=Math.sqrt(dx*dx+dy*dy)
+
+if(len===0) return
+
+dx/=len
+dy/=len
+
+// 從節點邊界開始
+let startX=ax+dx*(ra.width/2)
+let startY=ay+dy*(ra.height/2)
+
+let endX=bx-dx*(rb.width/2)
+let endY=by-dy*(rb.height/2)
+
+let line=document.createElementNS(
+"http://www.w3.org/2000/svg",
+"line"
+)
+
+line.setAttribute("x1",startX)
+line.setAttribute("y1",startY)
+line.setAttribute("x2",endX)
+line.setAttribute("y2",endY)
 
 line.setAttribute("stroke","black")
 line.setAttribute("stroke-width","2")
+line.setAttribute("marker-end","url(#arrow)")
+
+line.style.pointerEvents="stroke"
 
 line.onclick=()=>{
 
