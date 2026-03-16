@@ -2,54 +2,30 @@
 <html>
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Tech Tree Editor</title>
 
 <style>
 
 body{
+font-family:sans-serif;
 margin:0;
-font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;
-overflow:hidden;
+overflow:auto;
 }
 
 #toolbar{
 background:#eee;
 padding:6px;
+height:36px;
 display:flex;
 gap:6px;
-}
-
-#viewport{
-width:100vw;
-height:calc(100vh - 42px);
-overflow:hidden;
-background:#f8f8f8;
-position:relative;
-cursor:grab;
-}
-
-#world{
-position:absolute;
-transform-origin:0 0;
+align-items:center;
 }
 
 #canvas{
-position:absolute;
-width:6000px;
-height:6000px;
-}
-
-svg{
-position:absolute;
-width:6000px;
-height:6000px;
-pointer-events:none;
-}
-
-line{
-pointer-events:stroke;
-cursor:pointer;
+position:relative;
+width:4000px;
+height:3000px;
+background:#fafafa;
 }
 
 .node{
@@ -58,17 +34,26 @@ width:140px;
 padding:6px;
 border-radius:6px;
 border:1px solid #333;
-background:#ddd;
-user-select:none;
 cursor:move;
 }
 
 .node-title{
 font-weight:bold;
+cursor:text;
 }
 
-.selected{
-outline:3px solid red;
+svg{
+position:absolute;
+width:4000px;
+height:3000px;
+pointer-events:none;
+}
+
+line{
+stroke:black;
+stroke-width:2;
+pointer-events:auto;
+cursor:pointer;
 }
 
 </style>
@@ -78,177 +63,45 @@ outline:3px solid red;
 
 <div id="toolbar">
 
+<button onclick="autoArrange()">自動排列</button>
+
 <button onclick="addTech()">新增科技</button>
+
 <button onclick="addCategory()">新增類別</button>
+
 <button onclick="addEvent()">新增Event</button>
-<button onclick="autoLayout()">Auto Layout</button>
+
 <button onclick="exportJSON()">匯出</button>
+
 <button onclick="importJSON()">匯入</button>
 
 </div>
 
-<div id="viewport">
-
-<div id="world">
-
-<div id="canvas"></div>
+<div id="canvas">
 
 <svg id="links"></svg>
 
 </div>
 
-</div>
-
 <script>
-
-const canvas=document.getElementById("canvas")
-const svg=document.getElementById("links")
-const world=document.getElementById("world")
-const viewport=document.getElementById("viewport")
 
 let techs={}
 let links=[]
 let categories={general:"#cccccc"}
 let events=[]
+let selectedNodes = new Set()
 
-let selectedNodes=new Set()
-let linkStart=null
+let selected=null
 
-let zoom=1
-let panX=0
-let panY=0
-
-let undoStack=[]
-let redoStack=[]
-
-function pushState(){
-
-undoStack.push(JSON.stringify({techs,links,categories,events}))
-
-if(undoStack.length>100) undoStack.shift()
-
-redoStack.length=0
-
-}
-
-function undo(){
-
-if(undoStack.length==0) return
-
-redoStack.push(JSON.stringify({techs,links,categories,events}))
-
-let state=JSON.parse(undoStack.pop())
-
-restoreState(state)
-
-}
-
-function redo(){
-
-if(redoStack.length==0) return
-
-undoStack.push(JSON.stringify({techs,links,categories,events}))
-
-let state=JSON.parse(redoStack.pop())
-
-restoreState(state)
-
-}
-
-function restoreState(s){
-
-techs=s.techs
-links=s.links
-categories=s.categories
-events=s.events
-
-document.querySelectorAll(".node").forEach(n=>n.remove())
-
-for(let id in techs){
-
-createNode(techs[id])
-
-}
-
-drawLinks()
-
-}
-
-document.addEventListener("keydown",e=>{
-
-if(e.ctrlKey && e.key==="z"){
-e.preventDefault()
-undo()
-}
-
-if(e.ctrlKey && e.key==="y"){
-e.preventDefault()
-redo()
-}
-
-})
-
-function applyTransform(){
-
-world.style.transform=`translate(${panX}px,${panY}px) scale(${zoom})`
-
-}
-
-viewport.onwheel=e=>{
-
-e.preventDefault()
-
-let scale=e.deltaY<0?1.1:0.9
-
-zoom*=scale
-
-applyTransform()
-
-}
-
-let panning=false
-let panStartX=0
-let panStartY=0
-
-viewport.onmousedown=e=>{
-
-if(e.target!==viewport) return
-
-panning=true
-
-viewport.style.cursor="grabbing"
-
-panStartX=e.clientX-panX
-panStartY=e.clientY-panY
-
-}
-
-document.onmouseup=()=>{
-
-panning=false
-viewport.style.cursor="grab"
-
-}
-
-document.onmousemove=e=>{
-
-if(!panning) return
-
-panX=e.clientX-panStartX
-panY=e.clientY-panStartY
-
-applyTransform()
-
-}
+const canvas=document.getElementById("canvas")
+const svg=document.getElementById("links")
 
 function addTech(){
-
-pushState()
 
 let id="tech_"+Date.now()
 
 let tech={
-id,
+id:id,
 name:"new tech",
 tier:1,
 category:"general",
@@ -267,9 +120,9 @@ function addCategory(){
 
 let name=prompt("category name")
 
-if(!name) return
+if(!name)return
 
-let color=prompt("color","#a0a0ff")
+let color=prompt("color (#hex)","#a0a0ff")
 
 categories[name]=color
 
@@ -279,9 +132,9 @@ updateAllNodes()
 
 function addEvent(){
 
-let name=prompt("event")
+let name=prompt("event name")
 
-if(!name) return
+if(!name)return
 
 events.push(name)
 
@@ -292,27 +145,25 @@ updateAllNodes()
 function createNode(tech){
 
 let div=document.createElement("div")
-
 div.className="node"
-
 div.dataset.id=tech.id
 
 canvas.appendChild(div)
 
 renderNode(div,tech)
 
-dragNode(div)
+dragElement(div)
 
-div.onclick=e=>{
+div.onclick=(e)=>{
 
-if(e.ctrlKey || e.metaKey){
+if(e.ctrlKey){
 
 if(selectedNodes.has(tech.id)){
 selectedNodes.delete(tech.id)
-div.classList.remove("selected")
+div.style.outline=""
 }else{
 selectedNodes.add(tech.id)
-div.classList.add("selected")
+div.style.outline="3px solid red"
 }
 
 return
@@ -321,28 +172,28 @@ return
 
 if(e.shiftKey){
 
-if(linkStart==null){
-linkStart=tech.id
+if(selected==null){
+selected=tech.id
 }else{
-toggleLink(linkStart,tech.id)
-linkStart=null
+toggleLink(selected,tech.id)
+selected=null
 }
 
 }
 
 }
 
-div.oncontextmenu=e=>{
+div.oncontextmenu=(e)=>{
 
 e.preventDefault()
-
-pushState()
 
 let targets=[tech.id]
 
 if(selectedNodes.size>0){
 targets=[...selectedNodes]
 }
+
+if(!confirm("Delete "+targets.length+" tech(s)?")) return
 
 targets.forEach(id=>{
 
@@ -367,7 +218,7 @@ function renderNode(div,tech){
 
 div.style.left=tech.x+"px"
 div.style.top=tech.y+"px"
-div.style.background=categories[tech.category]||"#ddd"
+div.style.background=categories[tech.category] || "#ddd"
 
 let catOptions=""
 
@@ -389,10 +240,11 @@ eventOptions+=`<option ${sel}>${ev}</option>`
 
 div.innerHTML=`
 
-<div class="node-title" ondblclick="editTitle('${tech.id}')">${tech.name}</div>
+<div class="node-title" ondblclick="editTitle(this,'${tech.id}')">${tech.name}</div>
 
 tier
-<input type="number" value="${tech.tier}" style="width:40px"
+<input style="width:40px" type="number"
+value="${tech.tier}"
 onchange="updateTier('${tech.id}',this.value)">
 
 category
@@ -401,8 +253,7 @@ ${catOptions}
 </select>
 
 events
-<select multiple size="4"
-onmousedown="toggleEvent(event,'${tech.id}',this)">
+<select multiple size="4" onmousedown="toggleEvent(event,'${tech.id}',this)">
 ${eventOptions}
 </select>
 
@@ -410,17 +261,38 @@ ${eventOptions}
 
 }
 
-function editTitle(id){
+function toggleEvent(e,id,select){
 
-pushState()
+let option = e.target
+
+if(option.tagName !== "OPTION") return
+
+// 阻止瀏覽器預設選取行為
+e.preventDefault()
+
+// 手動切換
+option.selected = !option.selected
+
+let arr=[]
+
+for(let o of select.options){
+if(o.selected){
+arr.push(o.value)
+}
+}
+
+techs[id].events = arr
+
+}
+
+function editTitle(el,id){
 
 let val=prompt("name",techs[id].name)
 
 if(val){
 
 techs[id].name=val
-
-updateAllNodes()
+el.innerText=val
 
 }
 
@@ -428,29 +300,20 @@ updateAllNodes()
 
 function setCategory(id,val){
 
-pushState()
-
 techs[id].category=val
-
 updateAllNodes()
 
 }
 
-function toggleEvent(e,id,select){
-
-let option=e.target
-
-if(option.tagName!=="OPTION") return
-
-e.preventDefault()
-
-option.selected=!option.selected
+function setEvents(id,select){
 
 let arr=[]
 
 for(let o of select.options){
 
-if(o.selected) arr.push(o.value)
+if(o.selected){
+arr.push(o.value)
+}
 
 }
 
@@ -460,11 +323,13 @@ techs[id].events=arr
 
 function updateTier(id,val){
 
-pushState()
-
 val=parseInt(val)
 
 techs[id].tier=val
+techs[id].x=val*200
+
+let div=document.querySelector(`[data-id="${id}"]`)
+div.style.left=techs[id].x+"px"
 
 drawLinks()
 
@@ -475,7 +340,6 @@ function updateAllNodes(){
 for(let id in techs){
 
 let div=document.querySelector(`[data-id="${id}"]`)
-
 renderNode(div,techs[id])
 
 }
@@ -484,13 +348,17 @@ renderNode(div,techs[id])
 
 function toggleLink(a,b){
 
-pushState()
-
 let i=links.findIndex(l=>l.from==a && l.to==b)
 
-if(i>=0) links.splice(i,1)
+if(i>=0){
 
-else links.push({from:a,to:b})
+links.splice(i,1)
+
+}else{
+
+links.push({from:a,to:b})
+
+}
 
 drawLinks()
 
@@ -503,7 +371,7 @@ svg.innerHTML = `
 <marker id="arrow"
 markerWidth="10"
 markerHeight="10"
-refX="9"
+refX="8"
 refY="3"
 orient="auto"
 markerUnits="strokeWidth">
@@ -514,50 +382,50 @@ markerUnits="strokeWidth">
 
 links.forEach((l,i)=>{
 
-let fromTech=techs[l.from]
-let toTech=techs[l.to]
+let fromTech = techs[l.from]
+let toTech   = techs[l.to]
 
 if(!fromTech || !toTech) return
 
-let start=l.from
-let end=l.to
+let start = l.from
+let end   = l.to
+
+// 箭頭指向高 tier
+if(fromTech.tier > toTech.tier){
+start = l.to
+end   = l.from
+}
 
 let a=document.querySelector(`[data-id="${start}"]`)
 let b=document.querySelector(`[data-id="${end}"]`)
 
-if(!a||!b) return
+if(!a || !b) return
 
-let ra=a.getBoundingClientRect()
-let rb=b.getBoundingClientRect()
-let rc=canvas.getBoundingClientRect()
+let ax=a.offsetLeft + a.offsetWidth/2
+let ay=a.offsetTop  + a.offsetHeight/2
 
-let ax=ra.left-rc.left+ra.width/2
-let ay=ra.top-rc.top+ra.height/2
+let bx=b.offsetLeft + b.offsetWidth/2
+let by=b.offsetTop  + b.offsetHeight/2
 
-let bx=rb.left-rc.left+rb.width/2
-let by=rb.top-rc.top+rb.height/2
+// 方向向量
+let dx = bx - ax
+let dy = by - ay
 
-let dx=bx-ax
-let dy=by-ay
-
-let len=Math.sqrt(dx*dx+dy*dy)
+let len = Math.sqrt(dx*dx + dy*dy)
 
 if(len===0) return
 
 dx/=len
 dy/=len
 
-// 從節點邊界開始
-let startX=ax+dx*(ra.width/2)
-let startY=ay+dy*(ra.height/2)
+// 從節點邊緣開始
+let startX = ax + dx * (a.offsetWidth/2)
+let startY = ay + dy * (a.offsetHeight/2)
 
-let endX=bx-dx*(rb.width/2)
-let endY=by-dy*(rb.height/2)
+let endX = bx - dx * (b.offsetWidth/2)
+let endY = by - dy * (b.offsetHeight/2)
 
-let line=document.createElementNS(
-"http://www.w3.org/2000/svg",
-"line"
-)
+let line=document.createElementNS("http://www.w3.org/2000/svg","line")
 
 line.setAttribute("x1",startX)
 line.setAttribute("y1",startY)
@@ -568,16 +436,9 @@ line.setAttribute("stroke","black")
 line.setAttribute("stroke-width","2")
 line.setAttribute("marker-end","url(#arrow)")
 
-line.style.pointerEvents="stroke"
-
 line.onclick=()=>{
-
-pushState()
-
 links.splice(i,1)
-
 drawLinks()
-
 }
 
 svg.appendChild(line)
@@ -586,82 +447,124 @@ svg.appendChild(line)
 
 }
 
-function dragNode(el){
+
+function dragElement(el){
+
+let pos1=0,pos2=0,pos3=0,pos4=0
+
+el.onmousedown=dragMouseDown
+
+function dragMouseDown(e){
+
+pos3=e.clientX
+pos4=e.clientY
+
+document.onmouseup=closeDrag
+document.onmousemove=elementDrag
+
+}
+
+function elementDrag(e){
+
+pos1=pos3-e.clientX
+pos2=pos4-e.clientY
+
+pos3=e.clientX
+pos4=e.clientY
+
+el.style.top=(el.offsetTop-pos2)+"px"
+el.style.left=(el.offsetLeft-pos1)+"px"
 
 let id=el.dataset.id
 
-let dragging=false
-
-let startX,startY
-
-el.onmousedown=e=>{
-
-dragging=true
-
-startX=e.clientX-techs[id].x
-startY=e.clientY-techs[id].y
-
-}
-
-document.onmousemove=e=>{
-
-if(!dragging) return
-
-techs[id].x=(e.clientX-startX)/zoom
-techs[id].y=(e.clientY-startY)/zoom
-
-el.style.left=techs[id].x+"px"
-el.style.top=techs[id].y+"px"
+techs[id].x=el.offsetLeft
+techs[id].y=el.offsetTop
 
 drawLinks()
 
 }
 
-document.onmouseup=()=>{
+function closeDrag(){
 
-dragging=false
-
-}
-
-}
-
-function autoLayout(){
-
-pushState()
-
-let tiers={}
-
-for(let id in techs){
-
-let t=techs[id].tier
-
-if(!tiers[t]) tiers[t]=[]
-
-tiers[t].push(techs[id])
+document.onmouseup=null
+document.onmousemove=null
 
 }
 
-let spacingX=260
-let spacingY=140
+}
 
-Object.keys(tiers).forEach(t=>{
+function autoArrange(){
+  let tiers = {}
 
-let list=tiers[t]
+  // 分類節點到 tier
+  for(let id in techs){
+    let t = techs[id].tier || 1
+    if(!tiers[t]) tiers[t]=[]
+    tiers[t].push(techs[id])
+  }
 
-list.forEach((tech,i)=>{
+  // 設定每個 tier 的 Y 間距
+  const tierHeight = 160
+  const nodeWidth = 200
 
-tech.x=t*spacingX
-tech.y=i*spacingY+200
+  for(let t in tiers){
+    let nodes = tiers[t]
+    nodes.forEach((tech, idx)=>{
+      tech.y = idx * tierHeight
+      tech.x = t * nodeWidth
+      let div=document.querySelector(`[data-id="${tech.id}"]`)
+      if(div){
+        div.style.left = tech.x+"px"
+        div.style.top = tech.y+"px"
+      }
+    })
+  }
 
+  drawLinks()
+}
+
+// 取代內部 onclick/onmousedown/oncontextmenu
+document.querySelectorAll(".node").forEach(div=>{
+  div.addEventListener("click", function(e){
+    let tech = techs[div.dataset.id]
+    if(!tech) return
+    if(e.ctrlKey){
+      if(selectedNodes.has(tech.id)){
+        selectedNodes.delete(tech.id)
+        div.style.outline=""
+      }else{
+        selectedNodes.add(tech.id)
+        div.style.outline="3px solid red"
+      }
+      return
+    }
+    if(e.shiftKey){
+      if(selected==null){
+        selected=tech.id
+      }else{
+        toggleLink(selected,tech.id)
+        selected=null
+      }
+    }
+  })
+
+  div.addEventListener("contextmenu", function(e){
+    e.preventDefault()
+    let tech = techs[div.dataset.id]
+    if(!tech) return
+    let targets=[tech.id]
+    if(selectedNodes.size>0) targets=[...selectedNodes]
+    if(!confirm("Delete "+targets.length+" tech(s)?")) return
+    targets.forEach(id=>{
+      delete techs[id]
+      links=links.filter(l=>l.from!=id && l.to!=id)
+      let el=document.querySelector(`[data-id="${id}"]`)
+      if(el) el.remove()
+    })
+    selectedNodes.clear()
+    drawLinks()
+  })
 })
-
-})
-
-updateAllNodes()
-
-drawLinks()
-
-}
 
 function exportJSON(){
 
@@ -672,7 +575,6 @@ let blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"})
 let a=document.createElement("a")
 
 a.href=URL.createObjectURL(blob)
-
 a.download="tech_tree.json"
 
 a.click()
@@ -682,7 +584,6 @@ a.click()
 function importJSON(){
 
 let input=document.createElement("input")
-
 input.type="file"
 
 input.onchange=e=>{
@@ -695,12 +596,20 @@ reader.onload=()=>{
 
 let data=JSON.parse(reader.result)
 
-techs=data.techs||{}
-links=data.links||[]
-categories=data.categories||{general:"#ccc"}
-events=data.events||[]
+techs=data.techs
+links=data.links
+categories=data.categories
+events=data.events
 
-restoreState({techs,links,categories,events})
+document.querySelectorAll(".node").forEach(n=>n.remove())
+
+for(let id in techs){
+
+createNode(techs[id])
+
+}
+
+drawLinks()
 
 }
 
