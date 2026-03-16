@@ -3,14 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-
 <title>Tech Tree Editor</title>
 
 <style>
 
 body{
 margin:0;
-font-family:system-ui,-apple-system,Segoe UI,Roboto,Noto Sans,Arial,sans-serif;
+font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;
 overflow:hidden;
 }
 
@@ -22,17 +21,30 @@ gap:6px;
 }
 
 #viewport{
-position:relative;
 width:100vw;
-height:calc(100vh - 40px);
+height:calc(100vh - 42px);
 overflow:hidden;
-background:#fafafa;
+background:#f8f8f8;
+position:relative;
 cursor:grab;
 }
 
 #world{
 position:absolute;
 transform-origin:0 0;
+}
+
+#canvas{
+position:absolute;
+width:6000px;
+height:6000px;
+}
+
+svg{
+position:absolute;
+width:6000px;
+height:6000px;
+pointer-events:none;
 }
 
 .node{
@@ -43,24 +55,15 @@ border-radius:6px;
 border:1px solid #333;
 background:#ddd;
 user-select:none;
+cursor:move;
 }
 
 .node-title{
 font-weight:bold;
-cursor:text;
 }
 
-svg{
-position:absolute;
-overflow:visible;
-pointer-events:none;
-}
-
-line{
-stroke:black;
-stroke-width:2;
-pointer-events:stroke;
-cursor:pointer;
+.selected{
+outline:3px solid red;
 }
 
 </style>
@@ -70,93 +73,119 @@ cursor:pointer;
 
 <div id="toolbar">
 
-<button id="addTech">Add Tech</button>
-<button id="undo">Undo</button>
-<button id="redo">Redo</button>
-<button id="autoLayout">Auto Layout</button>
+<button onclick="addTech()">新增科技</button>
+<button onclick="addCategory()">新增類別</button>
+<button onclick="addEvent()">新增Event</button>
+<button onclick="autoLayout()">Auto Layout</button>
+<button onclick="exportJSON()">匯出</button>
+<button onclick="importJSON()">匯入</button>
 
 </div>
 
 <div id="viewport">
+
 <div id="world">
+
+<div id="canvas"></div>
 
 <svg id="links"></svg>
 
 </div>
+
 </div>
 
 <script>
 
-const viewport=document.getElementById("viewport")
-const world=document.getElementById("world")
+const canvas=document.getElementById("canvas")
 const svg=document.getElementById("links")
+const world=document.getElementById("world")
+const viewport=document.getElementById("viewport")
 
 let techs={}
 let links=[]
+let categories={general:"#cccccc"}
+let events=[]
+
+let selectedNodes=new Set()
+let linkStart=null
 
 let zoom=1
 let panX=0
 let panY=0
 
-let history=[]
-let future=[]
+let undoStack=[]
+let redoStack=[]
 
-let draggingNode=null
-let linkingFrom=null
+function pushState(){
 
-const GRID_X=220
-const GRID_Y=160
+undoStack.push(JSON.stringify({techs,links,categories,events}))
 
-function pushHistory(){
+if(undoStack.length>100) undoStack.shift()
 
-history.push(JSON.stringify({techs,links}))
-
-if(history.length>100)
-history.shift()
-
-future=[]
+redoStack.length=0
 
 }
 
 function undo(){
 
-if(history.length==0) return
+if(undoStack.length==0) return
 
-future.push(JSON.stringify({techs,links}))
+redoStack.push(JSON.stringify({techs,links,categories,events}))
 
-let s=history.pop()
-let d=JSON.parse(s)
+let state=JSON.parse(undoStack.pop())
 
-techs=d.techs
-links=d.links
-
-rebuild()
+restoreState(state)
 
 }
 
 function redo(){
 
-if(future.length==0) return
+if(redoStack.length==0) return
 
-history.push(JSON.stringify({techs,links}))
+undoStack.push(JSON.stringify({techs,links,categories,events}))
 
-let s=future.pop()
-let d=JSON.parse(s)
+let state=JSON.parse(redoStack.pop())
 
-techs=d.techs
-links=d.links
-
-rebuild()
+restoreState(state)
 
 }
 
-document.getElementById("undo").onclick=undo
-document.getElementById("redo").onclick=redo
+function restoreState(s){
 
-function updateTransform(){
+techs=s.techs
+links=s.links
+categories=s.categories
+events=s.events
 
-world.style.transform=
-`translate(${panX}px,${panY}px) scale(${zoom})`
+document.querySelectorAll(".node").forEach(n=>n.remove())
+
+for(let id in techs){
+
+createNode(techs[id])
+
+}
+
+drawLinks()
+
+}
+
+document.addEventListener("keydown",e=>{
+
+if(e.ctrlKey && e.key==="z"){
+e.preventDefault()
+undo()
+}
+
+if(e.ctrlKey && e.key==="y"){
+e.preventDefault()
+redo()
+}
+
+})
+
+function applyTransform(){
+
+world.style.transform=`translate(${panX}px,${panY}px) scale(${zoom})`
 
 }
 
@@ -164,16 +193,17 @@ viewport.onwheel=e=>{
 
 e.preventDefault()
 
-let factor=e.deltaY<0?1.1:0.9
+let scale=e.deltaY<0?1.1:0.9
 
-zoom*=factor
+zoom*=scale
 
-updateTransform()
+applyTransform()
 
 }
 
 let panning=false
-let px,py
+let panStartX=0
+let panStartY=0
 
 viewport.onmousedown=e=>{
 
@@ -181,10 +211,10 @@ if(e.target!==viewport) return
 
 panning=true
 
-px=e.clientX
-py=e.clientY
-
 viewport.style.cursor="grabbing"
+
+panStartX=e.clientX-panX
+panStartY=e.clientY-panY
 
 }
 
@@ -192,111 +222,272 @@ document.onmouseup=()=>{
 
 panning=false
 viewport.style.cursor="grab"
-draggingNode=null
 
 }
 
 document.onmousemove=e=>{
 
-if(panning){
+if(!panning) return
 
-panX+=e.clientX-px
-panY+=e.clientY-py
+panX=e.clientX-panStartX
+panY=e.clientY-panStartY
 
-px=e.clientX
-py=e.clientY
-
-updateTransform()
-
-}
-
-if(draggingNode){
-
-let id=draggingNode.dataset.id
-let t=techs[id]
-
-t.x+=(e.movementX)/zoom
-t.y+=(e.movementY)/zoom
-
-draggingNode.style.left=t.x+"px"
-draggingNode.style.top=t.y+"px"
-
-drawLinks()
-
-}
+applyTransform()
 
 }
 
 function addTech(){
 
-pushHistory()
+pushState()
 
 let id="tech_"+Date.now()
 
-techs[id]={
+let tech={
 id,
-name:"tech",
+name:"new tech",
 tier:1,
-x:0,
-y:0
+category:"general",
+events:[],
+x:200,
+y:200
 }
 
-createNode(techs[id])
+techs[id]=tech
 
-autoLayout()
-
-}
-
-document.getElementById("addTech").onclick=addTech
-
-function createNode(t){
-
-let d=document.createElement("div")
-
-d.className="node"
-d.dataset.id=t.id
-
-d.innerHTML=
-`<div class="node-title">${t.name}</div>`
-
-d.style.left=t.x+"px"
-d.style.top=t.y+"px"
-
-world.appendChild(d)
-
-d.onmousedown=e=>{
-
-e.stopPropagation()
-
-draggingNode=d
+createNode(tech)
 
 }
 
-d.onclick=e=>{
+function addCategory(){
 
-e.stopPropagation()
+let name=prompt("category name")
 
-if(linkingFrom==null){
+if(!name) return
 
-linkingFrom=t.id
-d.style.outline="3px solid red"
+let color=prompt("color","#a0a0ff")
 
+categories[name]=color
+
+updateAllNodes()
+
+}
+
+function addEvent(){
+
+let name=prompt("event")
+
+if(!name) return
+
+events.push(name)
+
+updateAllNodes()
+
+}
+
+function createNode(tech){
+
+let div=document.createElement("div")
+
+div.className="node"
+
+div.dataset.id=tech.id
+
+canvas.appendChild(div)
+
+renderNode(div,tech)
+
+dragNode(div)
+
+div.onclick=e=>{
+
+if(e.ctrlKey || e.metaKey){
+
+if(selectedNodes.has(tech.id)){
+selectedNodes.delete(tech.id)
+div.classList.remove("selected")
 }else{
+selectedNodes.add(tech.id)
+div.classList.add("selected")
+}
 
-pushHistory()
+return
 
-links.push({from:linkingFrom,to:t.id})
+}
 
-linkingFrom=null
+if(e.shiftKey){
 
-document.querySelectorAll(".node")
-.forEach(n=>n.style.outline="")
+if(linkStart==null){
+linkStart=tech.id
+}else{
+toggleLink(linkStart,tech.id)
+linkStart=null
+}
+
+}
+
+}
+
+div.oncontextmenu=e=>{
+
+e.preventDefault()
+
+pushState()
+
+let targets=[tech.id]
+
+if(selectedNodes.size>0){
+targets=[...selectedNodes]
+}
+
+targets.forEach(id=>{
+
+delete techs[id]
+
+links=links.filter(l=>l.from!=id && l.to!=id)
+
+let el=document.querySelector(`[data-id="${id}"]`)
+if(el) el.remove()
+
+})
+
+selectedNodes.clear()
 
 drawLinks()
 
 }
 
 }
+
+function renderNode(div,tech){
+
+div.style.left=tech.x+"px"
+div.style.top=tech.y+"px"
+div.style.background=categories[tech.category]||"#ddd"
+
+let catOptions=""
+
+for(let c in categories){
+
+catOptions+=`<option ${c==tech.category?"selected":""}>${c}</option>`
+
+}
+
+let eventOptions=""
+
+events.forEach(ev=>{
+
+let sel=tech.events.includes(ev)?"selected":""
+
+eventOptions+=`<option ${sel}>${ev}</option>`
+
+})
+
+div.innerHTML=`
+
+<div class="node-title" ondblclick="editTitle('${tech.id}')">${tech.name}</div>
+
+tier
+<input type="number" value="${tech.tier}" style="width:40px"
+onchange="updateTier('${tech.id}',this.value)">
+
+category
+<select onchange="setCategory('${tech.id}',this.value)">
+${catOptions}
+</select>
+
+events
+<select multiple size="4"
+onmousedown="toggleEvent(event,'${tech.id}',this)">
+${eventOptions}
+</select>
+
+`
+
+}
+
+function editTitle(id){
+
+pushState()
+
+let val=prompt("name",techs[id].name)
+
+if(val){
+
+techs[id].name=val
+
+updateAllNodes()
+
+}
+
+}
+
+function setCategory(id,val){
+
+pushState()
+
+techs[id].category=val
+
+updateAllNodes()
+
+}
+
+function toggleEvent(e,id,select){
+
+let option=e.target
+
+if(option.tagName!=="OPTION") return
+
+e.preventDefault()
+
+option.selected=!option.selected
+
+let arr=[]
+
+for(let o of select.options){
+
+if(o.selected) arr.push(o.value)
+
+}
+
+techs[id].events=arr
+
+}
+
+function updateTier(id,val){
+
+pushState()
+
+val=parseInt(val)
+
+techs[id].tier=val
+
+drawLinks()
+
+}
+
+function updateAllNodes(){
+
+for(let id in techs){
+
+let div=document.querySelector(`[data-id="${id}"]`)
+
+renderNode(div,techs[id])
+
+}
+
+}
+
+function toggleLink(a,b){
+
+pushState()
+
+let i=links.findIndex(l=>l.from==a && l.to==b)
+
+if(i>=0) links.splice(i,1)
+
+else links.push({from:a,to:b})
+
+drawLinks()
 
 }
 
@@ -304,34 +495,37 @@ function drawLinks(){
 
 svg.innerHTML=""
 
-for(let l of links){
+links.forEach((l,i)=>{
 
-let a=techs[l.from]
-let b=techs[l.to]
+let a=document.querySelector(`[data-id="${l.from}"]`)
+let b=document.querySelector(`[data-id="${l.to}"]`)
 
-if(!a||!b) continue
+if(!a||!b) return
 
-let x1=a.x+70
-let y1=a.y+40
+let ra=a.getBoundingClientRect()
+let rb=b.getBoundingClientRect()
+let rc=canvas.getBoundingClientRect()
 
-let x2=b.x+70
-let y2=b.y+40
+let ax=ra.left-rc.left+ra.width/2
+let ay=ra.top-rc.top+ra.height/2
+let bx=rb.left-rc.left+rb.width/2
+let by=rb.top-rc.top+rb.height/2
 
-let line=document.createElementNS(
-"http://www.w3.org/2000/svg",
-"line"
-)
+let line=document.createElementNS("http://www.w3.org/2000/svg","line")
 
-line.setAttribute("x1",x1)
-line.setAttribute("y1",y1)
-line.setAttribute("x2",x2)
-line.setAttribute("y2",y2)
+line.setAttribute("x1",ax)
+line.setAttribute("y1",ay)
+line.setAttribute("x2",bx)
+line.setAttribute("y2",by)
+
+line.setAttribute("stroke","black")
+line.setAttribute("stroke-width","2")
 
 line.onclick=()=>{
 
-pushHistory()
+pushState()
 
-links=links.filter(x=>x!==l)
+links.splice(i,1)
 
 drawLinks()
 
@@ -339,58 +533,135 @@ drawLinks()
 
 svg.appendChild(line)
 
+})
+
+}
+
+function dragNode(el){
+
+let id=el.dataset.id
+
+let dragging=false
+
+let startX,startY
+
+el.onmousedown=e=>{
+
+dragging=true
+
+startX=e.clientX-techs[id].x
+startY=e.clientY-techs[id].y
+
+}
+
+document.onmousemove=e=>{
+
+if(!dragging) return
+
+techs[id].x=(e.clientX-startX)/zoom
+techs[id].y=(e.clientY-startY)/zoom
+
+el.style.left=techs[id].x+"px"
+el.style.top=techs[id].y+"px"
+
+drawLinks()
+
+}
+
+document.onmouseup=()=>{
+
+dragging=false
+
 }
 
 }
 
 function autoLayout(){
 
+pushState()
+
 let tiers={}
 
 for(let id in techs){
 
-let t=techs[id]
+let t=techs[id].tier
 
-if(!tiers[t.tier])
-tiers[t.tier]=[]
+if(!tiers[t]) tiers[t]=[]
 
-tiers[t.tier].push(t)
+tiers[t].push(techs[id])
 
 }
 
-for(let tier in tiers){
+let spacingX=260
+let spacingY=140
 
-let arr=tiers[tier]
+Object.keys(tiers).forEach(t=>{
 
-arr.sort((a,b)=>a.name.localeCompare(b.name))
+let list=tiers[t]
 
-arr.forEach((t,i)=>{
+list.forEach((tech,i)=>{
 
-t.x=tier*GRID_X
-t.y=i*GRID_Y
+tech.x=t*spacingX
+tech.y=i*spacingY+200
 
 })
 
-}
+})
 
-rebuild()
-
-}
-
-document.getElementById("autoLayout").onclick=autoLayout
-
-function rebuild(){
-
-document.querySelectorAll(".node").forEach(n=>n.remove())
-
-for(let id in techs)
-createNode(techs[id])
+updateAllNodes()
 
 drawLinks()
 
 }
 
-updateTransform()
+function exportJSON(){
+
+let data={techs,links,categories,events}
+
+let blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"})
+
+let a=document.createElement("a")
+
+a.href=URL.createObjectURL(blob)
+
+a.download="tech_tree.json"
+
+a.click()
+
+}
+
+function importJSON(){
+
+let input=document.createElement("input")
+
+input.type="file"
+
+input.onchange=e=>{
+
+let file=e.target.files[0]
+
+let reader=new FileReader()
+
+reader.onload=()=>{
+
+let data=JSON.parse(reader.result)
+
+techs=data.techs||{}
+links=data.links||[]
+categories=data.categories||{general:"#ccc"}
+events=data.events||[]
+
+restoreState({techs,links,categories,events})
+
+}
+
+reader.readAsText(file)
+
+}
+
+input.click()
+
+}
 
 </script>
 
