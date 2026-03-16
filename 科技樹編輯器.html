@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+
+<title>Tech Tree Editor</title>
+
+<style>
+
+body{
+margin:0;
+font-family:system-ui,-apple-system,Segoe UI,Roboto,Noto Sans,Arial,sans-serif;
+overflow:hidden;
+}
+
+#toolbar{
+background:#eee;
+padding:6px;
+display:flex;
+gap:6px;
+}
+
+#viewport{
+position:relative;
+width:100vw;
+height:calc(100vh - 40px);
+overflow:hidden;
+background:#fafafa;
+cursor:grab;
+}
+
+#world{
+position:absolute;
+transform-origin:0 0;
+}
+
+.node{
+position:absolute;
+width:140px;
+padding:6px;
+border-radius:6px;
+border:1px solid #333;
+background:#ddd;
+user-select:none;
+}
+
+.node-title{
+font-weight:bold;
+cursor:text;
+}
+
+svg{
+position:absolute;
+overflow:visible;
+pointer-events:none;
+}
+
+line{
+stroke:black;
+stroke-width:2;
+pointer-events:stroke;
+cursor:pointer;
+}
+
+</style>
+</head>
+
+<body>
+
+<div id="toolbar">
+
+<button id="addTech">Add Tech</button>
+<button id="undo">Undo</button>
+<button id="redo">Redo</button>
+<button id="autoLayout">Auto Layout</button>
+
+</div>
+
+<div id="viewport">
+<div id="world">
+
+<svg id="links"></svg>
+
+</div>
+</div>
+
+<script>
+
+const viewport=document.getElementById("viewport")
+const world=document.getElementById("world")
+const svg=document.getElementById("links")
+
+let techs={}
+let links=[]
+
+let zoom=1
+let panX=0
+let panY=0
+
+let history=[]
+let future=[]
+
+let draggingNode=null
+let linkingFrom=null
+
+const GRID_X=220
+const GRID_Y=160
+
+function pushHistory(){
+
+history.push(JSON.stringify({techs,links}))
+
+if(history.length>100)
+history.shift()
+
+future=[]
+
+}
+
+function undo(){
+
+if(history.length==0) return
+
+future.push(JSON.stringify({techs,links}))
+
+let s=history.pop()
+let d=JSON.parse(s)
+
+techs=d.techs
+links=d.links
+
+rebuild()
+
+}
+
+function redo(){
+
+if(future.length==0) return
+
+history.push(JSON.stringify({techs,links}))
+
+let s=future.pop()
+let d=JSON.parse(s)
+
+techs=d.techs
+links=d.links
+
+rebuild()
+
+}
+
+document.getElementById("undo").onclick=undo
+document.getElementById("redo").onclick=redo
+
+function updateTransform(){
+
+world.style.transform=
+`translate(${panX}px,${panY}px) scale(${zoom})`
+
+}
+
+viewport.onwheel=e=>{
+
+e.preventDefault()
+
+let factor=e.deltaY<0?1.1:0.9
+
+zoom*=factor
+
+updateTransform()
+
+}
+
+let panning=false
+let px,py
+
+viewport.onmousedown=e=>{
+
+if(e.target!==viewport) return
+
+panning=true
+
+px=e.clientX
+py=e.clientY
+
+viewport.style.cursor="grabbing"
+
+}
+
+document.onmouseup=()=>{
+
+panning=false
+viewport.style.cursor="grab"
+draggingNode=null
+
+}
+
+document.onmousemove=e=>{
+
+if(panning){
+
+panX+=e.clientX-px
+panY+=e.clientY-py
+
+px=e.clientX
+py=e.clientY
+
+updateTransform()
+
+}
+
+if(draggingNode){
+
+let id=draggingNode.dataset.id
+let t=techs[id]
+
+t.x+=(e.movementX)/zoom
+t.y+=(e.movementY)/zoom
+
+draggingNode.style.left=t.x+"px"
+draggingNode.style.top=t.y+"px"
+
+drawLinks()
+
+}
+
+}
+
+function addTech(){
+
+pushHistory()
+
+let id="tech_"+Date.now()
+
+techs[id]={
+id,
+name:"tech",
+tier:1,
+x:0,
+y:0
+}
+
+createNode(techs[id])
+
+autoLayout()
+
+}
+
+document.getElementById("addTech").onclick=addTech
+
+function createNode(t){
+
+let d=document.createElement("div")
+
+d.className="node"
+d.dataset.id=t.id
+
+d.innerHTML=
+`<div class="node-title">${t.name}</div>`
+
+d.style.left=t.x+"px"
+d.style.top=t.y+"px"
+
+world.appendChild(d)
+
+d.onmousedown=e=>{
+
+e.stopPropagation()
+
+draggingNode=d
+
+}
+
+d.onclick=e=>{
+
+e.stopPropagation()
+
+if(linkingFrom==null){
+
+linkingFrom=t.id
+d.style.outline="3px solid red"
+
+}else{
+
+pushHistory()
+
+links.push({from:linkingFrom,to:t.id})
+
+linkingFrom=null
+
+document.querySelectorAll(".node")
+.forEach(n=>n.style.outline="")
+
+drawLinks()
+
+}
+
+}
+
+}
+
+function drawLinks(){
+
+svg.innerHTML=""
+
+for(let l of links){
+
+let a=techs[l.from]
+let b=techs[l.to]
+
+if(!a||!b) continue
+
+let x1=a.x+70
+let y1=a.y+40
+
+let x2=b.x+70
+let y2=b.y+40
+
+let line=document.createElementNS(
+"http://www.w3.org/2000/svg",
+"line"
+)
+
+line.setAttribute("x1",x1)
+line.setAttribute("y1",y1)
+line.setAttribute("x2",x2)
+line.setAttribute("y2",y2)
+
+line.onclick=()=>{
+
+pushHistory()
+
+links=links.filter(x=>x!==l)
+
+drawLinks()
+
+}
+
+svg.appendChild(line)
+
+}
+
+}
+
+function autoLayout(){
+
+let tiers={}
+
+for(let id in techs){
+
+let t=techs[id]
+
+if(!tiers[t.tier])
+tiers[t.tier]=[]
+
+tiers[t.tier].push(t)
+
+}
+
+for(let tier in tiers){
+
+let arr=tiers[tier]
+
+arr.sort((a,b)=>a.name.localeCompare(b.name))
+
+arr.forEach((t,i)=>{
+
+t.x=tier*GRID_X
+t.y=i*GRID_Y
+
+})
+
+}
+
+rebuild()
+
+}
+
+document.getElementById("autoLayout").onclick=autoLayout
+
+function rebuild(){
+
+document.querySelectorAll(".node").forEach(n=>n.remove())
+
+for(let id in techs)
+createNode(techs[id])
+
+drawLinks()
+
+}
+
+updateTransform()
+
+</script>
+
+</body>
+</html>
